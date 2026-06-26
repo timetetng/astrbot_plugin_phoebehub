@@ -16,5 +16,11 @@
     "type": "list",
     "default": ["啾比", "jiubi", "jbi"],
     "hint": "消息内容精确匹配这些关键词之一时触发随机表情包。"
+  },
+  "proxy": {
+    "description": "HTTP 代理地址（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "如 http://127.0.0.1:7890。留空不使用代理。"
   }
 }

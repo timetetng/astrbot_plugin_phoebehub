@@ -25,6 +25,7 @@ class PhoebeHubPlugin(Star):
         self.trigger_keywords = config.get(
             "trigger_keywords", ["啾比", "jiubi", "jbi"]
         )
+        self.proxy = config.get("proxy", "") or None
 
         # Local image cache directory
         self.image_dir: Path | None = None
@@ -85,10 +86,16 @@ class PhoebeHubPlugin(Star):
             yield event.plain_result("呜哇，出错了~ 请稍后再试。")
             event.stop_event()
 
+    def _client(self) -> httpx.AsyncClient:
+        kwargs = {"timeout": 30}
+        if self.proxy:
+            kwargs["proxies"] = self.proxy
+        return httpx.AsyncClient(**kwargs)
+
     async def _get_random_meme(self) -> dict | None:
         now = time.time()
         if self._cache_data is None or now - self._cache_time > self.cache_ttl:
-            async with httpx.AsyncClient() as client:
+            async with self._client() as client:
                 resp = await client.get(MEMES_URL, timeout=10)
                 resp.raise_for_status()
                 self._cache_data = resp.json()
@@ -105,8 +112,8 @@ class PhoebeHubPlugin(Star):
             return local_path
 
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{BASE_URL}/{url_path}", timeout=30)
+            async with self._client() as client:
+                resp = await client.get(f"{BASE_URL}/{url_path}")
                 resp.raise_for_status()
                 local_path.write_bytes(resp.content)
                 logger.info(f"已缓存图片到本地: {local_path}")

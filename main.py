@@ -1,9 +1,15 @@
 import asyncio
+import difflib
 import json
 import random
 import time
 from pathlib import Path
 import httpx
+
+try:
+    import jieba
+except ImportError:
+    jieba = None
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import logger
@@ -39,6 +45,7 @@ class PhoebeHubPlugin(Star):
 
         self._cache_data = None
         self._cache_time = 0.0
+        self._synonyms = None
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -87,13 +94,64 @@ class PhoebeHubPlugin(Star):
             yield event.plain_result("呜哇，出错了~ 请稍后再试。")
             event.stop_event()
 
+    @filter.command("搜比")
+    async def search_meme(self, event: AstrMessageEvent):
+        parts = event.message_str.strip().split(maxsplit=1)
+        keyword = parts[1] if len(parts) > 1 else ""
+        if not keyword:
+            yield event.plain_result("请提供搜索关键词，例如：/搜比 好馋")
+            event.stop_event()
+            return
+
+        try:
+            memes = await self._load_memes()
+            if not memes:
+                yield event.plain_result("暂时没有表情包哦~菲比还在收集中！")
+                event.stop_event()
+                return
+
+            kw = keyword.strip()
+
+            for meme in memes:
+                title = meme.get("title", "")
+                if title and title == kw:
+                    local_path = await self._ensure_local_image(meme["url"], meme)
+                    if local_path:
+                        yield event.chain_result([
+                            Comp.Plain(f"找到表情包：{title}\n"),
+                            Comp.Image.fromFileSystem(str(local_path)),
+                        ])
+                    else:
+                        yield event.plain_result(f"找到表情包：{title}，但图片下载失败了~")
+                    event.stop_event()
+                    return
+
+            results = self._fuzzy_match(kw, memes)
+
+            if results:
+                lines = ["未找到完全匹配的表情包，以下为相似结果："]
+                for i, (title, score) in enumerate(results, 1):
+                    lines.append(f"{i}. {title}（相似度 {score:.0%}）")
+                yield event.plain_result("\n".join(lines))
+            else:
+                yield event.plain_result(
+                    f"没有找到与「{kw}」相关的表情包，请换个搜索词试试~"
+                )
+
+            event.stop_event()
+
+        except Exception as e:
+            logger.error(f"[phoebehub] 搜索异常: {e}")
+            yield event.plain_result("搜索出错了，请稍后再试~")
+            event.stop_event()
+
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict = {"timeout": 120}
         if self.proxy:
             kwargs["proxy"] = self.proxy
         return httpx.AsyncClient(**kwargs)
 
-    async def _get_random_meme(self) -> dict | None:
+    async def _load_memes(self) -> list:
         now = time.time()
         if self._cache_data is None or now - self._cache_time > self.cache_ttl:
             t0 = time.time()
@@ -108,9 +166,92 @@ class PhoebeHubPlugin(Star):
                 f"耗时={time.time() - t0:.1f}s"
             )
             self._cache_time = now
+        return self._cache_data.get("memes", [])
 
-        memes = self._cache_data.get("memes", [])
+    async def _get_random_meme(self) -> dict | None:
+        memes = await self._load_memes()
         return random.choice(memes) if memes else None
+
+    def _fuzzy_match(self, keyword: str, memes: list) -> list:
+        if jieba is not None:
+            return self._fuzzy_match_jieba(keyword, memes)
+        return self._fuzzy_match_fallback(keyword, memes)
+
+    def _fuzzy_match_jieba(self, keyword: str, memes: list) -> list:
+        query_tokens = set(jieba.cut(keyword))
+        if not query_tokens:
+            return []
+
+        synonyms = self._load_synonyms()
+        expanded = set(query_tokens)
+        for t in query_tokens:
+            expanded.update(synonyms.get(t, ()))
+
+        best = []
+        for m in memes:
+            title = m.get("title", "")
+            if not title:
+                continue
+
+            title_tokens = set(jieba.cut(title))
+            direct = len(query_tokens & title_tokens)
+            syn_hits = len((expanded - query_tokens) & title_tokens)
+            token_score = (direct + syn_hits * 0.6) / len(query_tokens)
+
+            kw_bg = {keyword[i : i + 2] for i in range(len(keyword) - 1)}
+            ti_bg = {title[i : i + 2] for i in range(len(title) - 1)}
+            bg_score = (
+                len(kw_bg & ti_bg) / max(len(kw_bg | ti_bg), 1)
+                if kw_bg and ti_bg
+                else 0
+            )
+
+            sub_score = 0.8 if (keyword in title or title in keyword) else 0
+            score = max(token_score, bg_score, sub_score)
+
+            if score >= 0.35:
+                best.append((title, round(min(score, 1.0), 3)))
+
+        best.sort(key=lambda x: -x[1])
+        return best[:3]
+
+    def _fuzzy_match_fallback(self, keyword: str, memes: list) -> list:
+        titles = [m.get("title", "") for m in memes if m.get("title")]
+        close = difflib.get_close_matches(keyword, titles, n=3, cutoff=0.3)
+        return [
+            (t, difflib.SequenceMatcher(None, keyword.lower(), t.lower()).ratio())
+            for t in close
+        ]
+
+    def _load_synonyms(self) -> dict:
+        if self._synonyms is not None:
+            return self._synonyms
+
+        syn_path = Path(__file__).parent / "meme_synonyms.json"
+        if not syn_path.exists():
+            self._synonyms = {}
+            return self._synonyms
+
+        try:
+            with open(syn_path, encoding="utf-8") as f:
+                raw = json.load(f)
+
+            syns = {}
+            for word, syn_list in raw.items():
+                if word not in syns:
+                    syns[word] = set()
+                for s in syn_list:
+                    syns[word].add(s)
+                    if s not in syns:
+                        syns[s] = set()
+                    syns[s].add(word)
+
+            self._synonyms = syns
+        except Exception as e:
+            logger.warning(f"[phoebehub] 同义词文件加载失败: {e}")
+            self._synonyms = {}
+
+        return self._synonyms
 
     async def _ensure_local_image(self, url_path: str, meme: dict) -> Path | None:
         local_path = self.image_dir / f"{meme['id']}{Path(url_path).suffix}"

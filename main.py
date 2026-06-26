@@ -1,3 +1,4 @@
+import asyncio
 import json
 import random
 import time
@@ -116,21 +117,38 @@ class PhoebeHubPlugin(Star):
         if local_path.exists():
             return local_path
 
-        t0 = time.time()
-        try:
-            async with self._client() as client:
-                resp = await client.get(f"{BASE_URL}/{url_path}")
-                resp.raise_for_status()
-                local_path.write_bytes(resp.content)
-            logger.info(
-                f"[phoebehub] 图片下载完成: {local_path.name}, "
-                f"{len(resp.content)} bytes, "
-                f"耗时={time.time() - t0:.1f}s"
-            )
+        max_retries = 3
+        for attempt in range(max_retries):
+            t0 = time.time()
+            try:
+                async with self._client() as client:
+                    resp = await client.get(f"{BASE_URL}/{url_path}")
+                    resp.raise_for_status()
+                    local_path.write_bytes(resp.content)
+                logger.info(
+                    f"[phoebehub] 图片下载完成: {local_path.name}, "
+                    f"{len(resp.content)} bytes, "
+                    f"耗时={time.time() - t0:.1f}s"
+                )
+                return local_path
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait = 2**attempt
+                    logger.warning(
+                        f"[phoebehub] 图片下载失败(第{attempt+1}/{max_retries}次): {e}, "
+                        f"{wait}s后重试..."
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(
+                        f"[phoebehub] 图片下载失败(已重试{max_retries}次): {e}"
+                    )
+
+        if local_path.exists():
+            logger.warning(f"[phoebehub] 使用本地缓存保底: {local_path.name}")
             return local_path
-        except Exception as e:
-            logger.error(f"[phoebehub] 图片下载失败: {e}")
-            return None
+
+        return None
 
     def _clean_expired_cache(self) -> int:
         if self.cache_max_hours <= 0 or not self.image_dir.exists():

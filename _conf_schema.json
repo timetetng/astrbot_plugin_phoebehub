@@ -1,15 +1,9 @@
 {
   "cache_ttl": {
-    "description": "数据缓存时间（秒）",
+    "description": "memes.json 缓存时间（秒）",
     "type": "int",
     "default": 300,
-    "hint": "memes.json 的缓存时间，减少重复请求。设为 0 关闭缓存。"
-  },
-  "download_local": {
-    "description": "是否下载图片到本地缓存",
-    "type": "bool",
-    "default": false,
-    "hint": "开启后，首次请求的图片会下载到 data/plugin_data/astrbot_plugin_phoebehub/images/，后续同一张图走本地文件，不再走 HTTP。"
+    "hint": "设为 0 关闭缓存。"
   },
   "trigger_keywords": {
     "description": "触发关键词列表",
@@ -18,9 +12,15 @@
     "hint": "消息内容精确匹配这些关键词之一时触发随机表情包。"
   },
   "proxy": {
-    "description": "HTTP 代理地址（可选）",
+    "description": "HTTP 代理地址",
     "type": "string",
     "default": "",
-    "hint": "如 http://127.0.0.1:7890。留空不使用代理。"
+    "hint": "如 http://127.0.0.1:7890。用于 memes.json 和图片下载。留空直连。"
+  },
+  "cache_max_hours": {
+    "description": "本地图片缓存保留时长（小时）",
+    "type": "int",
+    "default": 24,
+    "hint": "超过此时间的本地缓存文件会被自动清理。设为 0 不自动清理。"
   }
 }

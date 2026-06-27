@@ -192,6 +192,10 @@ class PhoebeHubPlugin(Star):
     def _fuzzy_match(self, keyword: str, memes: list) -> list:
         if _HAS_RAPIDFUZZ:
             return self._fuzzy_match_rapidfuzz(keyword, memes)
+        logger.warning(
+            "[phoebehub] rapidfuzz/zhconv 未安装，已降级为 difflib 搜索，"
+            "效果较差。请执行: uv add rapidfuzz zhconv jieba"
+        )
         return self._fuzzy_match_fallback(keyword, memes)
 
     def _fuzzy_match_rapidfuzz(self, keyword: str, memes: list) -> list:

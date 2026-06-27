@@ -8,7 +8,9 @@
   "trigger_keywords": {
     "description": "触发关键词列表",
     "type": "list",
-    "default": ["啾比", "jiubi", "jbi"],
+    "default": [
+      "啾比"
+    ],
     "hint": "消息内容精确匹配这些关键词之一时触发随机表情包。"
   },
   "proxy": {

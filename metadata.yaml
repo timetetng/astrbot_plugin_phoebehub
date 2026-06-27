@@ -3,7 +3,7 @@ display_name: 随机菲比表情包
 author: timetetng
 description: 从 phoebehub.top 随机获取一张菲比表情包。输入 啾比 即可获得一张可爱的菲比表情包~
 version: "1.0.0"
-link: https://github.com/xj/astrbot_plugin_phoebehub
+link: https://github.com/timetetng/astrbot_plugin_phoebehub
 support_platforms:
   - aiocqhttp
   - qq_official

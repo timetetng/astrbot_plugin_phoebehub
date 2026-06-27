@@ -24,5 +24,12 @@
     "type": "int",
     "default": 24,
     "hint": "超过此时间的本地缓存文件会被自动清理。设为 0 不自动清理。"
+  },
+  "vision_provider_id": {
+    "description": "视觉模型 provider（用于 /传比 自动命名）",
+    "type": "string",
+    "_special": "select_provider",
+    "default": "",
+    "hint": "选择一个支持图像理解的聊天模型。留空则必须手动提供名字。动图会自动采样 5 帧。"
   }
 }

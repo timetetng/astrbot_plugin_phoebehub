@@ -26,6 +26,9 @@ from astrbot.api import AstrBotConfig
 import astrbot.api.message_components as Comp
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
+from phoebehub_preprocess import process as preprocess_image, unique_name
+from phoebehub_captioner import caption_image
+
 MEMES_URL = "https://phoebehub.top/data/memes.json"
 BASE_URL = "https://phoebehub.top"
 PLUGIN_NAME = "astrbot_plugin_phoebehub"
@@ -37,14 +40,20 @@ class PhoebeHubPlugin(Star):
         config = config or {}
 
         self.cache_ttl = int(config.get("cache_ttl", 300))
-        self.trigger_keywords = config.get("trigger_keywords", ["啾比", "jiubi", "jbi"])
+        self.trigger_keywords = config.get("trigger_keywords", ["啾比"])
         self.proxy = config.get("proxy", "") or None
         self.cache_max_hours = int(config.get("cache_max_hours", 24))
+        self.vision_provider_id = config.get("vision_provider_id", "") or ""
 
         self.image_dir = (
             Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "images"
         )
         self.image_dir.mkdir(parents=True, exist_ok=True)
+
+        self.staging_dir = (
+            Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "staging"
+        )
+        self.staging_dir.mkdir(parents=True, exist_ok=True)
 
         cleaned = self._clean_expired_cache()
         if cleaned:
@@ -161,6 +170,127 @@ class PhoebeHubPlugin(Star):
             yield event.plain_result("搜索出错了，请稍后再试~")
             event.stop_event()
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    @filter.command("传比")
+    async def upload_meme(self, event: AstrMessageEvent):
+        parts = event.message_str.strip().split(maxsplit=1)
+        name = parts[1].strip() if len(parts) > 1 else ""
+        safe = ""
+        if name:
+            # Filter out path separators and shell-unfriendly chars; allow CJK + ASCII letters/digits/_-.
+            safe = "".join(c for c in name if c.isalnum() or c in "_-. " or "\u4e00" <= c <= "\u9fff")
+            safe = safe.strip().strip(".")
+
+        if not safe and not self.vision_provider_id:
+            yield event.plain_result(
+                "请提供表情包名字，例如：/传比 开心菲比\n"
+                "（或在配置里设置 vision_provider_id 以启用 AI 自动命名）"
+            )
+            event.stop_event()
+            return
+        if name and not safe:
+            yield event.plain_result("名字里至少要有一个有效字符哦~")
+            event.stop_event()
+            return
+
+        images = [c for c in event.message_obj.message if isinstance(c, Comp.Image)]
+        if not images:
+            yield event.plain_result("没找到图片，请把图片和 /传比 一起发出来~")
+            event.stop_event()
+            return
+
+        taken = self._collect_staging_names()
+        uploader = f"{event.get_platform_name() or 'unknown'}:{event.get_sender_id()}"
+
+        results = []
+        for idx, img in enumerate(images):
+            try:
+                src_path = await img.convert_to_file_path()
+            except Exception as e:
+                logger.warning(f"[phoebehub] 图片下载失败: {e}")
+                results.append(("fail", f"下载失败: {e}"))
+                continue
+
+            # Caption before preprocess so the model sees the original quality.
+            ai_name = ""
+            ai_description = ""
+            user_hint_for_model = safe if safe else ""
+            if len(images) > 1 and safe:
+                user_hint_for_model = f"{safe}{idx + 1}"
+
+            if self.vision_provider_id:
+                cap = await caption_image(
+                    self.context,
+                    self.vision_provider_id,
+                    src_path,
+                    user_hint=user_hint_for_model,
+                )
+                if cap:
+                    ai_name = cap.name
+                    ai_description = cap.description
+
+            stem = ai_name or (safe if len(images) == 1 else f"{safe}{idx + 1}")
+            if not stem:
+                stem = f"未命名{idx + 1}"
+            try:
+                proc = preprocess_image(Path(src_path), self.staging_dir, name_stem=stem)
+            except Exception as e:
+                logger.error(f"[phoebehub] 预处理失败: {e}")
+                results.append(("fail", f"{stem}: 预处理失败"))
+                continue
+
+            # Dedupe against existing staged filenames + remote meme titles.
+            ext = proc.fmt
+            final_name = unique_name(taken, stem, ext)
+            taken.add(final_name)
+
+            # Rename the file to the deduped name (process() used stem verbatim).
+            final_path = self.staging_dir / final_name
+            if proc.path != final_path:
+                proc.path.rename(final_path)
+
+            sidecar = {
+                "name": stem,
+                "fmt": ext,
+                "original_bytes": proc.original_bytes,
+                "final_bytes": proc.final_bytes,
+                "width": proc.width,
+                "height": proc.height,
+                "uploaded_by": uploader,
+                "uploaded_at": int(time.time()),
+                "source_filename": Path(src_path).name,
+                "note": proc.note,
+                "ai_description": ai_description,
+                "user_hint": safe,
+            }
+            (self.staging_dir / f"{final_name}.json").write_text(
+                json.dumps(sidecar, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            desc_snippet = f"  「{ai_description}」" if ai_description else ""
+            results.append((
+                "ok",
+                f"{final_name}  {proc.original_bytes // 1024}KB→{proc.final_bytes // 1024}KB  {proc.width}x{proc.height}{desc_snippet}",
+            ))
+            logger.info(
+                f"[phoebehub] staged: {final_name} "
+                f"({proc.original_bytes} → {proc.final_bytes} bytes) by {uploader}"
+            )
+
+        lines = []
+        for status, text in results:
+            mark = "✓" if status == "ok" else "✗"
+            lines.append(f"{mark} {text}")
+        ok_count = sum(1 for s, _ in results if s == "ok")
+        header = (
+            f"已暂存 {ok_count}/{len(results)} 张，待 /pr提交 时打包发送。"
+            if ok_count
+            else "全部失败"
+        )
+        yield event.plain_result("\n".join([header, *lines]))
+        event.stop_event()
+
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict = {"timeout": 120}
         if self.proxy:
@@ -271,6 +401,24 @@ class PhoebeHubPlugin(Star):
             self._synonyms = {}
 
         return self._synonyms
+
+    def _collect_staging_names(self) -> set[str]:
+        """Filenames (with ext) already taken — either locally staged or remote.
+        Used to dedup uploads so PR filenames don't collide."""
+        taken: set[str] = set()
+        if self.staging_dir.exists():
+            for f in self.staging_dir.iterdir():
+                if f.is_file() and f.suffix != ".json":
+                    taken.add(f.name)
+
+        # Pull from the in-memory cache if available; otherwise empty.
+        if self._cache_data:
+            for m in self._cache_data.get("memes", []):
+                url = m.get("url", "")
+                if url:
+                    taken.add(Path(url).name)
+
+        return taken
 
     async def _ensure_local_image(self, url_path: str, meme: dict) -> Path | None:
         local_path = self.image_dir / f"{meme['id']}{Path(url_path).suffix}"

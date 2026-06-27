@@ -1,3 +1,4 @@
 rapidfuzz>=3.14
 zhconv>=1.4
 jieba>=0.42
+pillow>=10.0

@@ -104,12 +104,19 @@ class PhoebeHubPlugin(Star):
 
     @filter.command("搜比")
     async def search_meme(self, event: AstrMessageEvent):
-        parts = event.message_str.strip().split(maxsplit=1)
+        parts = event.message_str.strip().split(maxsplit=2)
         keyword = parts[1] if len(parts) > 1 else ""
         if not keyword:
-            yield event.plain_result("请提供搜索关键词，例如：/搜比 好馋")
+            yield event.plain_result("请提供搜索关键词，例如：/搜比 好馋 5")
             event.stop_event()
             return
+
+        limit = 3
+        if len(parts) > 2:
+            try:
+                limit = max(1, min(int(parts[2]), 10))
+            except ValueError:
+                pass
 
         try:
             memes = await self._load_memes()
@@ -119,25 +126,12 @@ class PhoebeHubPlugin(Star):
                 return
 
             kw = keyword.strip()
-
-            for meme in memes:
-                title = meme.get("title", "")
-                if title and title == kw:
-                    local_path = await self._ensure_local_image(meme["url"], meme)
-                    if local_path:
-                        yield event.chain_result([
-                            Comp.Plain(f"找到表情包：{title}\n"),
-                            Comp.Image.fromFileSystem(str(local_path)),
-                        ])
-                    else:
-                        yield event.plain_result(f"找到表情包：{title}，但图片下载失败了~")
-                    event.stop_event()
-                    return
-
-            results = self._fuzzy_match(kw, memes)
+            results = self._fuzzy_match(kw, memes, limit)
 
             if results:
-                lines = ["未找到完全匹配的表情包，以下为相似结果："]
+                best_score = results[0][1]
+                header = "找到以下表情包：" if best_score == 1.0 else "未找到完全匹配的表情包，以下为相似结果："
+                lines = [header]
                 chain = []
                 for i, (title, score) in enumerate(results, 1):
                     lines.append(f"{i}. {title}（相似度 {score:.0%}）")
@@ -189,16 +183,16 @@ class PhoebeHubPlugin(Star):
         memes = await self._load_memes()
         return random.choice(memes) if memes else None
 
-    def _fuzzy_match(self, keyword: str, memes: list) -> list:
+    def _fuzzy_match(self, keyword: str, memes: list, limit: int = 3) -> list:
         if _HAS_RAPIDFUZZ:
-            return self._fuzzy_match_rapidfuzz(keyword, memes)
+            return self._fuzzy_match_rapidfuzz(keyword, memes, limit)
         logger.warning(
             "[phoebehub] rapidfuzz/zhconv 未安装，已降级为 difflib 搜索，"
             "效果较差。请执行: uv add rapidfuzz zhconv jieba"
         )
-        return self._fuzzy_match_fallback(keyword, memes)
+        return self._fuzzy_match_fallback(keyword, memes, limit)
 
-    def _fuzzy_match_rapidfuzz(self, keyword: str, memes: list) -> list:
+    def _fuzzy_match_rapidfuzz(self, keyword: str, memes: list, limit: int = 3) -> list:
         kw_norm = _s2t(keyword, "zh-tw")
         kw_tokens = set(jieba.cut(keyword)) if jieba else set()
         synonyms = self._load_synonyms()
@@ -230,15 +224,15 @@ class PhoebeHubPlugin(Star):
                 best.append((title, round(score, 3)))
 
         best.sort(key=lambda x: -x[1])
-        return best[:3]
+        return best[:limit]
 
-    def _fuzzy_match_fallback(self, keyword: str, memes: list) -> list:
+    def _fuzzy_match_fallback(self, keyword: str, memes: list, limit: int = 3) -> list:
         titles = [m.get("title", "") for m in memes if m.get("title")]
-        close = difflib.get_close_matches(keyword, titles, n=3, cutoff=0.3)
+        close = difflib.get_close_matches(keyword, titles, n=limit, cutoff=0.3)
         return [
             (t, difflib.SequenceMatcher(None, keyword.lower(), t.lower()).ratio())
             for t in close
-        ]
+        ][:limit]
 
     def _load_synonyms(self) -> dict:
         if self._synonyms is not None:

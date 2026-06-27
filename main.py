@@ -10,6 +10,14 @@ try:
     import jieba
 except ImportError:
     jieba = None
+try:
+    from rapidfuzz import fuzz as _fuzz
+    from zhconv import convert as _s2t
+    _HAS_RAPIDFUZZ = True
+except ImportError:
+    _fuzz = None
+    _s2t = None
+    _HAS_RAPIDFUZZ = False
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import logger
@@ -130,9 +138,18 @@ class PhoebeHubPlugin(Star):
 
             if results:
                 lines = ["未找到完全匹配的表情包，以下为相似结果："]
+                chain = []
                 for i, (title, score) in enumerate(results, 1):
                     lines.append(f"{i}. {title}（相似度 {score:.0%}）")
-                yield event.plain_result("\n".join(lines))
+                msg = "\n".join(lines)
+                chain.append(Comp.Plain(msg + "\n"))
+                for title, _ in results:
+                    meme = next((m for m in memes if m.get("title") == title), None)
+                    if meme:
+                        path = await self._ensure_local_image(meme["url"], meme)
+                        if path:
+                            chain.append(Comp.Image.fromFileSystem(str(path)))
+                yield event.chain_result(chain)
             else:
                 yield event.plain_result(
                     f"没有找到与「{kw}」相关的表情包，请换个搜索词试试~"
@@ -173,19 +190,14 @@ class PhoebeHubPlugin(Star):
         return random.choice(memes) if memes else None
 
     def _fuzzy_match(self, keyword: str, memes: list) -> list:
-        if jieba is not None:
-            return self._fuzzy_match_jieba(keyword, memes)
+        if _HAS_RAPIDFUZZ:
+            return self._fuzzy_match_rapidfuzz(keyword, memes)
         return self._fuzzy_match_fallback(keyword, memes)
 
-    def _fuzzy_match_jieba(self, keyword: str, memes: list) -> list:
-        query_tokens = set(jieba.cut(keyword))
-        if not query_tokens:
-            return []
-
+    def _fuzzy_match_rapidfuzz(self, keyword: str, memes: list) -> list:
+        kw_norm = _s2t(keyword, "zh-tw")
+        kw_tokens = set(jieba.cut(keyword)) if jieba else set()
         synonyms = self._load_synonyms()
-        expanded = set(query_tokens)
-        for t in query_tokens:
-            expanded.update(synonyms.get(t, ()))
 
         best = []
         for m in memes:
@@ -193,24 +205,25 @@ class PhoebeHubPlugin(Star):
             if not title:
                 continue
 
-            title_tokens = set(jieba.cut(title))
-            direct = len(query_tokens & title_tokens)
-            syn_hits = len((expanded - query_tokens) & title_tokens)
-            token_score = (direct + syn_hits * 0.6) / len(query_tokens)
+            title_norm = _s2t(title, "zh-tw")
+            base = max(
+                _fuzz.ratio(kw_norm, title_norm),
+                _fuzz.partial_ratio(kw_norm, title_norm),
+                _fuzz.token_sort_ratio(kw_norm, title_norm),
+                _fuzz.token_set_ratio(kw_norm, title_norm),
+            ) / 100
 
-            kw_bg = {keyword[i : i + 2] for i in range(len(keyword) - 1)}
-            ti_bg = {title[i : i + 2] for i in range(len(title) - 1)}
-            bg_score = (
-                len(kw_bg & ti_bg) / max(len(kw_bg | ti_bg), 1)
-                if kw_bg and ti_bg
-                else 0
-            )
+            syn_score = 0.0
+            if base < 0.6 and kw_tokens and synonyms:
+                title_tokens = set(jieba.cut(title))
+                for qt in kw_tokens:
+                    if qt in synonyms and synonyms[qt] & title_tokens:
+                        syn_score = 0.7
+                        break
 
-            sub_score = 0.8 if (keyword in title or title in keyword) else 0
-            score = max(token_score, bg_score, sub_score)
-
-            if score >= 0.35:
-                best.append((title, round(min(score, 1.0), 3)))
+            score = max(base, syn_score)
+            if score >= 0.4:
+                best.append((title, round(score, 3)))
 
         best.sort(key=lambda x: -x[1])
         return best[:3]

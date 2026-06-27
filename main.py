@@ -13,6 +13,7 @@ except ImportError:
 try:
     from rapidfuzz import fuzz as _fuzz
     from zhconv import convert as _s2t
+
     _HAS_RAPIDFUZZ = True
 except ImportError:
     _fuzz = None
@@ -36,9 +37,7 @@ class PhoebeHubPlugin(Star):
         config = config or {}
 
         self.cache_ttl = int(config.get("cache_ttl", 300))
-        self.trigger_keywords = config.get(
-            "trigger_keywords", ["啾比", "jiubi", "jbi"]
-        )
+        self.trigger_keywords = config.get("trigger_keywords", ["啾比", "jiubi", "jbi"])
         self.proxy = config.get("proxy", "") or None
         self.cache_max_hours = int(config.get("cache_max_hours", 24))
 
@@ -78,10 +77,12 @@ class PhoebeHubPlugin(Star):
                 event.stop_event()
                 return
 
-            yield event.chain_result([
-                Comp.Plain(f"{title}\n"),
-                Comp.Image.fromFileSystem(str(local_path)),
-            ])
+            yield event.chain_result(
+                [
+                    Comp.Plain(f"{title}\n"),
+                    Comp.Image.fromFileSystem(str(local_path)),
+                ]
+            )
 
             logger.info(
                 f"[phoebehub] 完成: {title} ({local_path.name}), "
@@ -130,7 +131,11 @@ class PhoebeHubPlugin(Star):
 
             if results:
                 best_score = results[0][1]
-                header = "找到以下表情包：" if best_score == 1.0 else "未找到完全匹配的表情包，以下为相似结果："
+                header = (
+                    "找到以下表情包："
+                    if best_score == 1.0
+                    else "未找到完全匹配的表情包，以下为相似结果："
+                )
                 lines = [header]
                 chain = []
                 for i, (title, score) in enumerate(results, 1):
@@ -204,12 +209,15 @@ class PhoebeHubPlugin(Star):
                 continue
 
             title_norm = _s2t(title, "zh-tw")
-            base = max(
-                _fuzz.ratio(kw_norm, title_norm),
-                _fuzz.partial_ratio(kw_norm, title_norm),
-                _fuzz.token_sort_ratio(kw_norm, title_norm),
-                _fuzz.token_set_ratio(kw_norm, title_norm),
-            ) / 100
+            base = (
+                max(
+                    _fuzz.ratio(kw_norm, title_norm),
+                    _fuzz.partial_ratio(kw_norm, title_norm),
+                    _fuzz.token_sort_ratio(kw_norm, title_norm),
+                    _fuzz.token_set_ratio(kw_norm, title_norm),
+                )
+                / 100
+            )
 
             syn_score = 0.0
             if base < 0.6 and kw_tokens and synonyms:
@@ -287,7 +295,7 @@ class PhoebeHubPlugin(Star):
                 if attempt < max_retries - 1:
                     wait = 2**attempt
                     logger.warning(
-                        f"[phoebehub] 图片下载失败(第{attempt+1}/{max_retries}次): {e}, "
+                        f"[phoebehub] 图片下载失败(第{attempt + 1}/{max_retries}次): {e}, "
                         f"{wait}s后重试..."
                     )
                     await asyncio.sleep(wait)

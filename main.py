@@ -198,7 +198,7 @@ class PhoebeHubPlugin(Star):
         return self._fuzzy_match_fallback(keyword, memes, limit)
 
     def _fuzzy_match_rapidfuzz(self, keyword: str, memes: list, limit: int = 3) -> list:
-        kw_norm = _s2t(keyword, "zh-tw")
+        kw_norm = _s2t(keyword, "zh-tw").lower()
         kw_tokens = set(jieba.cut(keyword)) if jieba else set()
         synonyms = self._load_synonyms()
 
@@ -208,7 +208,7 @@ class PhoebeHubPlugin(Star):
             if not title:
                 continue
 
-            title_norm = _s2t(title, "zh-tw")
+            title_norm = _s2t(title, "zh-tw").lower()
             base = (
                 max(
                     _fuzz.ratio(kw_norm, title_norm),

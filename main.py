@@ -474,7 +474,7 @@ class PhoebeHubPlugin(Star):
         yield event.plain_result("修改完成：\n" + "\n".join(changes))
         event.stop_event()
 
-    @filter.command("pr提交")
+    @filter.command("pr提交",alias=["提交pr"])
     async def pr_submit(self, event: AstrMessageEvent):
         if not self._check_auth(event):
             yield event.plain_result("只有 bot 管理员才能提交 PR～")

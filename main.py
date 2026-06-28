@@ -321,17 +321,16 @@ class PhoebeHubPlugin(Star):
     async def help_cmd(self, event: AstrMessageEvent):
         yield event.chain_result([
             Comp.Plain(
-                "啾比表情包插件使用说明\n"
+                "菲比表情包插件使用说明\n"
                 "━━━━━━━━━━━━━━━━\n"
                 "啾比            随机发一张表情包\n"
                 "/搜比 <关键词> [数量]  搜索表情包\n"
-                "/传比 [名字]     上传图片到 staging\n"
-                "                支持回复引用图片\n"
-                "/传比列表        查看 staging 中的图片\n"
+                "/传比 [名字(可选)]     上传图片到暂存区\n"
+                "/传比列表        查看暂存区中的图片\n"
                 "/改比 <序号>    修改名字/描述\n"
-                "                例: /改比 1 名字=暴爽菲比 描述=开心\n"
-                "/删比 <序号>     从 staging 删除图片\n"
-                "/pr提交         提交 staging 到 GitHub PR\n"
+                "例: /改比 1 名字=暴爽菲比 描述=开心\n"
+                "/删比 <序号>     从暂存区删除图片\n"
+                "/pr提交         提交暂存区所有图片到 GitHub PR\n"
                 "/pr状态         查看已提交 PR 的合并/关闭状态"
             ),
         ])

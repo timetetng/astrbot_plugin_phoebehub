@@ -240,8 +240,12 @@ class PhoebeHubPlugin(Star):
                     ai_name = cap.name
                     ai_description = cap.description
 
-            stem = ai_name or (safe if len(images) == 1 else f"{safe}{idx + 1}")
-            if not stem:
+            # User-provided name always takes priority; AI only supplies description.
+            if safe:
+                stem = safe if len(images) == 1 else f"{safe}{idx + 1}"
+            elif ai_name:
+                stem = ai_name
+            else:
                 stem = f"未命名{idx + 1}"
             try:
                 proc = preprocess_image(Path(src_path), self.staging_dir, name_stem=stem)

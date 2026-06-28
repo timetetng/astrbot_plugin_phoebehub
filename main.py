@@ -28,6 +28,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .phoebehub_preprocess import process as preprocess_image, unique_name
 from .phoebehub_captioner import caption_image
+from .phoebehub_pr import PhoebeHubPR
 
 MEMES_URL = "https://phoebehub.top/data/memes.json"
 BASE_URL = "https://phoebehub.top"
@@ -44,6 +45,8 @@ class PhoebeHubPlugin(Star):
         self.proxy = config.get("proxy", "") or None
         self.cache_max_hours = int(config.get("cache_max_hours", 24))
         self.vision_provider_id = config.get("vision_provider_id", "") or ""
+        self.github_token = config.get("github_token", "") or ""
+        self.github_target_owner = config.get("github_target_owner", "") or ""
 
         self.image_dir = (
             Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "images"
@@ -297,6 +300,68 @@ class PhoebeHubPlugin(Star):
             else "全部失败"
         )
         yield event.plain_result("\n".join([header, *lines]))
+        event.stop_event()
+
+    @filter.command("pr提交")
+    async def pr_submit(self, event: AstrMessageEvent):
+        if not self.github_token:
+            yield event.plain_result("请先在插件配置中设置 github_token 才能自动提交 PR～")
+            event.stop_event()
+            return
+
+        staged = [f for f in self.staging_dir.iterdir() if f.is_file()]
+        images = [f for f in staged if f.suffix in (".webp", ".gif", ".jpg", ".jpeg", ".png")]
+        if not images:
+            yield event.plain_result("staging 目录为空，请先用 /传比 上传图片～")
+            event.stop_event()
+            return
+
+        yield event.plain_result(f"正在提交 {len(images)} 张图片到 GitHub，请稍候…")
+
+        target_owner = self.github_target_owner or ""
+        try:
+            pr_client = PhoebeHubPR(
+                self.github_token,
+                proxy=self.proxy,
+            )
+
+            if target_owner:
+                result = await pr_client.submit(
+                    self.staging_dir,
+                    target_owner=target_owner,
+                    target_repo="Phoebe-Hub",
+                    create_pr=True,
+                )
+            else:
+                result = await pr_client.submit_pr(self.staging_dir)
+
+        except Exception as e:
+            logger.error(f"[phoebehub] PR 提交失败: {e}")
+            yield event.plain_result(f"提交失败: {e}")
+            event.stop_event()
+            return
+
+        if result["ok"]:
+            lines = [
+                f"✓ 已提交 {len(images)} 张图片",
+            ]
+            branch_info = result.get("branch")
+            if branch_info:
+                lines.append(f"  分支: {branch_info}")
+            if result.get("pr_url"):
+                lines.append(f"  PR: {result['pr_url']}")
+            else:
+                pr_owner = target_owner or "fork"
+                lines.append(f"  目标: {pr_owner}/Phoebe-Hub")
+
+            yield event.plain_result("\n".join(lines))
+
+            for f in staged:
+                f.unlink()
+            logger.info("[phoebehub] staging 已清理")
+        else:
+            yield event.plain_result(f"提交失败: {result['message']}")
+
         event.stop_event()
 
     def _client(self) -> httpx.AsyncClient:

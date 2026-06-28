@@ -31,5 +31,17 @@
     "_special": "select_provider",
     "default": "",
     "hint": "选择一个支持图像理解的聊天模型。留空则必须手动提供名字。动图会自动采样 5 帧。"
+  },
+  "github_token": {
+    "description": "GitHub Personal Access Token（用于 /pr提交 自动推图）",
+    "type": "string",
+    "default": "",
+    "hint": "需要 repo 权限。在 https://github.com/settings/tokens 创建。"
+  },
+  "github_target_owner": {
+    "description": "推送目标 GitHub 仓库所有者",
+    "type": "string",
+    "default": "timetetng",
+    "hint": "测试期间可设为你的 fork 用户名。正式使用时会自动 fork 上游仓库。"
   }
 }

@@ -43,5 +43,11 @@
     "type": "string",
     "default": "timetetng",
     "hint": "测试期间可设为你的 fork 用户名。正式使用时会自动 fork 上游仓库。"
+  },
+  "upload_auth": {
+    "description": "上传/PR 权限控制",
+    "type": "string",
+    "default": "admin",
+    "hint": "admin=仅 bot 管理员可用; everyone=所有人可用"
   }
 }

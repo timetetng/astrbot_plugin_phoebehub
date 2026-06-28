@@ -47,6 +47,7 @@ class PhoebeHubPlugin(Star):
         self.vision_provider_id = config.get("vision_provider_id", "") or ""
         self.github_token = config.get("github_token", "") or ""
         self.github_target_owner = config.get("github_target_owner", "") or ""
+        self.upload_auth = config.get("upload_auth", "admin") or "admin"
 
         self.image_dir = (
             Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "images"
@@ -173,9 +174,19 @@ class PhoebeHubPlugin(Star):
             yield event.plain_result("搜索出错了，请稍后再试~")
             event.stop_event()
 
+    def _check_auth(self, event: AstrMessageEvent) -> bool:
+        """Return True if upload_auth allows this sender."""
+        if self.upload_auth == "everyone":
+            return True
+        return event.is_admin()
+
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("传比")
     async def upload_meme(self, event: AstrMessageEvent):
+        if not self._check_auth(event):
+            yield event.plain_result("只有 bot 管理员才能上传图片～")
+            event.stop_event()
+            return
         parts = event.message_str.strip().split(maxsplit=1)
         name = parts[1].strip() if len(parts) > 1 else ""
         safe = ""
@@ -306,6 +317,24 @@ class PhoebeHubPlugin(Star):
         yield event.plain_result("\n".join([header, *lines]))
         event.stop_event()
 
+    @filter.command("啾比帮助")
+    async def help_cmd(self, event: AstrMessageEvent):
+        yield event.chain_result([
+            Comp.Plain(
+                "啾比表情包插件使用说明\n"
+                "━━━━━━━━━━━━━━━━\n"
+                "啾比            随机发一张表情包\n"
+                "/搜比 <关键词> [数量]  搜索表情包\n"
+                "/传比 [名字]     上传图片到 staging\n"
+                "                支持回复引用图片\n"
+                "/传比列表        查看 staging 中的图片\n"
+                "/传比改 <序号>    修改名字/描述\n"
+                "                例: /传比改 1 名字=暴爽菲比 描述=开心\n"
+                "/pr提交         提交 staging 到 GitHub PR"
+            ),
+        ])
+        event.stop_event()
+
     @filter.command("传比列表")
     async def list_staging(self, event: AstrMessageEvent):
         images = sorted(
@@ -336,6 +365,10 @@ class PhoebeHubPlugin(Star):
 
     @filter.command("传比改")
     async def edit_staging(self, event: AstrMessageEvent):
+        if not self._check_auth(event):
+            yield event.plain_result("只有 bot 管理员才能修改～")
+            event.stop_event()
+            return
         parts = event.message_str.strip().split(maxsplit=2)
         if len(parts) < 2:
             yield event.plain_result("用法：/传比改 <序号> [名字=xxx] [描述=xxx]")
@@ -443,6 +476,10 @@ class PhoebeHubPlugin(Star):
 
     @filter.command("pr提交")
     async def pr_submit(self, event: AstrMessageEvent):
+        if not self._check_auth(event):
+            yield event.plain_result("只有 bot 管理员才能提交 PR～")
+            event.stop_event()
+            return
         if not self.github_token:
             yield event.plain_result("请先在插件配置中设置 github_token 才能自动提交 PR～")
             event.stop_event()

@@ -26,8 +26,8 @@ from astrbot.api import AstrBotConfig
 import astrbot.api.message_components as Comp
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from phoebehub_preprocess import process as preprocess_image, unique_name
-from phoebehub_captioner import caption_image
+from .phoebehub_preprocess import process as preprocess_image, unique_name
+from .phoebehub_captioner import caption_image
 
 MEMES_URL = "https://phoebehub.top/data/memes.json"
 BASE_URL = "https://phoebehub.top"

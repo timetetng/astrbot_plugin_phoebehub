@@ -328,8 +328,8 @@ class PhoebeHubPlugin(Star):
                 "/传比 [名字]     上传图片到 staging\n"
                 "                支持回复引用图片\n"
                 "/传比列表        查看 staging 中的图片\n"
-                "/传比改 <序号>    修改名字/描述\n"
-                "                例: /传比改 1 名字=暴爽菲比 描述=开心\n"
+                "/改比 <序号>    修改名字/描述\n"
+                "                例: /改比 1 名字=暴爽菲比 描述=开心\n"
                 "/删比 <序号>     从 staging 删除图片\n"
                 "/pr提交         提交 staging 到 GitHub PR\n"
                 "/pr状态         查看已提交 PR 的合并/关闭状态"
@@ -361,11 +361,11 @@ class PhoebeHubPlugin(Star):
             desc_snippet = f"  「{desc}」" if desc else ""
             lines.append(f"#{idx}  {img.name}{desc_snippet}")
         lines.append("")
-        lines.append("使用 /传比改 <序号> [名字=xxx] [描述=xxx] 修改")
+        lines.append("使用 /改比 <序号> [名字=xxx] [描述=xxx] 修改")
         yield event.plain_result("\n".join(lines))
         event.stop_event()
 
-    @filter.command("传比改")
+    @filter.command("改比")
     async def edit_staging(self, event: AstrMessageEvent):
         if not self._check_auth(event):
             yield event.plain_result("只有 bot 管理员才能修改～")
@@ -373,7 +373,7 @@ class PhoebeHubPlugin(Star):
             return
         parts = event.message_str.strip().split(maxsplit=2)
         if len(parts) < 2:
-            yield event.plain_result("用法：/传比改 <序号> [名字=xxx] [描述=xxx]")
+            yield event.plain_result("用法：/改比 <序号> [名字=xxx] [描述=xxx]")
             event.stop_event()
             return
 

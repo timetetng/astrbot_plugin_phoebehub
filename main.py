@@ -194,8 +194,16 @@ class PhoebeHubPlugin(Star):
             return
 
         images = [c for c in event.message_obj.message if isinstance(c, Comp.Image)]
+
         if not images:
-            yield event.plain_result("没找到图片，请把图片和 /传比 一起发出来~")
+            for comp in event.message_obj.message:
+                if isinstance(comp, Comp.Reply) and comp.chain:
+                    images = [c for c in comp.chain if isinstance(c, Comp.Image)]
+                    if images:
+                        break
+
+        if not images:
+            yield event.plain_result("没找到图片，请把图片和 /传比 一起发出来，或回复一条带图片的消息~")
             event.stop_event()
             return
 

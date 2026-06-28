@@ -93,11 +93,19 @@ def _save_gif_iter(src_img: Image.Image, src_path: Path, dst: Path) -> int:
             src_img.seek(i)
             out_frames.append(src_img.convert("RGB").copy())
         out_frames[0].save(
-            dst, save_all=True, append_images=out_frames[1:],
+            dst, format="GIF", save_all=True, append_images=out_frames[1:],
             optimize=True, duration=src_img.info.get("duration", 100), loop=0,
         )
     else:
-        src_img.save(dst, "GIF", optimize=True)
+            src_img.seek(0)
+            out_frames = []
+            for i in range(frames):
+                src_img.seek(i)
+                out_frames.append(src_img.convert("RGB").copy())
+            out_frames[0].save(
+                dst, format="GIF", save_all=True, append_images=out_frames[1:],
+                optimize=True, duration=src_img.info.get("duration", 100), loop=0,
+            )
 
     if dst.stat().st_size <= MAX_BYTES:
         return dst.stat().st_size
@@ -113,7 +121,7 @@ def _save_gif_iter(src_img: Image.Image, src_path: Path, dst: Path) -> int:
             src_img.seek(i)
             out_frames.append(src_img.convert("RGB").resize((new_w, new_h), Image.LANCZOS))
         out_frames[0].save(
-            dst, save_all=True, append_images=out_frames[1:],
+            dst, format="GIF", save_all=True, append_images=out_frames[1:],
             optimize=True, duration=src_img.info.get("duration", 100), loop=0,
         )
         scale -= 0.15

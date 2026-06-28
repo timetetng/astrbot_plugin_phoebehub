@@ -201,6 +201,26 @@ class PhoebeHubPR:
                 return
             r.raise_for_status()
 
+    async def list_prs_from_fork(
+        self, fork_owner: str, state: str = "all", per_page: int = 20
+    ) -> list[dict]:
+        """List PRs from a fork owner to the upstream repo.
+
+        ``state``: ``"open"``, ``"closed"``, or ``"all"``.
+        Returns PR dicts sorted by GitHub's default (most recently updated first).
+        """
+        async with self._client() as c:
+            r = await c.get(
+                f"{self.api_base}/repos/{self.upstream_owner}/{self.upstream_repo}/pulls",
+                params={"state": state, "per_page": min(per_page, 100)},
+            )
+            r.raise_for_status()
+            all_prs = r.json()
+        return [
+            pr for pr in all_prs
+            if pr.get("head", {}).get("user", {}).get("login") == fork_owner
+        ]
+
     # ------------------------------------------------------------------
     # Core: push staged files as a commit, optionally create PR
     # ------------------------------------------------------------------
@@ -237,6 +257,19 @@ class PhoebeHubPR:
         if not image_files:
             return {"ok": False, "branch": None, "pr_url": None,
                     "message": "staging 目录为空，没有可提交的图片。"}
+
+        # 2a. If creating a PR, check for existing open PRs from this fork
+        if create_pr:
+            existing = await self.list_prs_from_fork(target_owner, state="open")
+            if existing:
+                pr_url = existing[0].get("html_url", "")
+                return {
+                    "ok": False, "branch": None, "pr_url": pr_url,
+                    "message": (
+                        f"已有未关闭的 PR ({pr_url})，"
+                        f"请等待合并或关闭后再提交新 PR。"
+                    ),
+                }
 
         # 2. Build memes.json entries from sidecars
         new_entries: list[MemeEntry] = []
@@ -362,6 +395,18 @@ class PhoebeHubPR:
         """
         user = await self.get_user()
         fork_owner = user["login"]
+
+        # 0. Reject if there's already an open PR from this fork
+        existing = await self.list_prs_from_fork(fork_owner, state="open")
+        if existing:
+            pr_url = existing[0].get("html_url", "")
+            return {
+                "ok": False, "branch": None, "pr_url": pr_url,
+                "message": (
+                    f"已有未关闭的 PR ({pr_url})，"
+                    f"请等待合并或关闭后再提交新 PR。"
+                ),
+            }
 
         # 1. Ensure fork exists
         await self.ensure_fork(fork_owner)

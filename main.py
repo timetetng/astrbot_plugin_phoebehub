@@ -330,7 +330,9 @@ class PhoebeHubPlugin(Star):
                 "/传比列表        查看 staging 中的图片\n"
                 "/传比改 <序号>    修改名字/描述\n"
                 "                例: /传比改 1 名字=暴爽菲比 描述=开心\n"
-                "/pr提交         提交 staging 到 GitHub PR"
+                "/删比 <序号>     从 staging 删除图片\n"
+                "/pr提交         提交 staging 到 GitHub PR\n"
+                "/pr状态         查看已提交 PR 的合并/关闭状态"
             ),
         ])
         event.stop_event()
@@ -474,6 +476,43 @@ class PhoebeHubPlugin(Star):
         yield event.plain_result("修改完成：\n" + "\n".join(changes))
         event.stop_event()
 
+    @filter.command("删比")
+    async def delete_staging(self, event: AstrMessageEvent):
+        if not self._check_auth(event):
+            yield event.plain_result("只有 bot 管理员才能删除～")
+            event.stop_event()
+            return
+        parts = event.message_str.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            yield event.plain_result("用法：/删比 <序号>")
+            event.stop_event()
+            return
+        try:
+            idx = int(parts[1]) - 1
+        except ValueError:
+            yield event.plain_result("序号必须是数字")
+            event.stop_event()
+            return
+
+        images = sorted(
+            f for f in self.staging_dir.iterdir()
+            if f.is_file() and f.suffix in (".webp", ".gif", ".jpg", ".jpeg", ".png")
+        )
+        if idx < 0 or idx >= len(images):
+            yield event.plain_result(f"序号超出范围，当前共 {len(images)} 张图片")
+            event.stop_event()
+            return
+
+        img = images[idx]
+        sidecar_path = self.staging_dir / f"{img.name}.json"
+
+        img.unlink()
+        if sidecar_path.exists():
+            sidecar_path.unlink()
+
+        yield event.plain_result(f"已删除 {img.name} 及其元数据")
+        event.stop_event()
+
     @filter.command("pr提交",alias=["提交pr"])
     async def pr_submit(self, event: AstrMessageEvent):
         if not self._check_auth(event):
@@ -502,6 +541,7 @@ class PhoebeHubPlugin(Star):
             )
 
             if target_owner:
+                await pr_client.sync_fork_branch(target_owner, "main")
                 result = await pr_client.submit(
                     self.staging_dir,
                     target_owner=target_owner,
@@ -538,6 +578,56 @@ class PhoebeHubPlugin(Star):
         else:
             yield event.plain_result(f"提交失败: {result['message']}")
 
+        event.stop_event()
+
+    @filter.command("pr状态")
+    async def pr_status(self, event: AstrMessageEvent):
+        if not self.github_token:
+            yield event.plain_result("请先在插件配置中设置 github_token～")
+            event.stop_event()
+            return
+
+        try:
+            pr_client = PhoebeHubPR(
+                self.github_token,
+                proxy=self.proxy,
+            )
+            user = await pr_client.get_user()
+            fork_owner = user["login"]
+            prs = await pr_client.list_prs_from_fork(fork_owner, state="all")
+        except Exception as e:
+            logger.error(f"[phoebehub] PR 状态查询失败: {e}")
+            yield event.plain_result(f"查询失败: {e}")
+            event.stop_event()
+            return
+
+        if not prs:
+            yield event.plain_result("暂无 PR 记录～")
+            event.stop_event()
+            return
+
+        lines = [f"PR 状态 (共 {len(prs)} 个)："]
+        for pr in prs:
+            num = pr.get("number", "?")
+            title = pr.get("title", "?")
+            state = pr.get("state", "?")
+            merged_at = pr.get("merged_at")
+            html_url = pr.get("html_url", "?")
+
+            if state == "open":
+                badge = "⏳ 开放中"
+            elif merged_at:
+                badge = "✅ 已合并"
+            else:
+                badge = "❌ 已关闭（未合并）"
+
+            lines.append(f"\n#{num} {badge}")
+            lines.append(f"   {title}")
+            lines.append(f"   {html_url}")
+
+        yield event.chain_result([
+            Comp.Plain("\n".join(lines)),
+        ])
         event.stop_event()
 
     def _client(self) -> httpx.AsyncClient:

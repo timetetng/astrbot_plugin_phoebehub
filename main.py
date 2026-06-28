@@ -302,6 +302,141 @@ class PhoebeHubPlugin(Star):
         yield event.plain_result("\n".join([header, *lines]))
         event.stop_event()
 
+    @filter.command("传比列表")
+    async def list_staging(self, event: AstrMessageEvent):
+        images = sorted(
+            f for f in self.staging_dir.iterdir()
+            if f.is_file() and f.suffix in (".webp", ".gif", ".jpg", ".jpeg", ".png")
+        )
+        if not images:
+            yield event.plain_result("staging 目录为空，没有待提交的图片～")
+            event.stop_event()
+            return
+
+        lines = ["当前 staging 中的图片："]
+        for idx, img in enumerate(images, 1):
+            sidecar_path = self.staging_dir / f"{img.name}.json"
+            desc = ""
+            if sidecar_path.exists():
+                try:
+                    data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+                    desc = data.get("ai_description", "")
+                except Exception:
+                    pass
+            desc_snippet = f"  「{desc}」" if desc else ""
+            lines.append(f"#{idx}  {img.name}{desc_snippet}")
+        lines.append("")
+        lines.append("使用 /传比改 <序号> [名字=xxx] [描述=xxx] 修改")
+        yield event.plain_result("\n".join(lines))
+        event.stop_event()
+
+    @filter.command("传比改")
+    async def edit_staging(self, event: AstrMessageEvent):
+        parts = event.message_str.strip().split(maxsplit=2)
+        if len(parts) < 2:
+            yield event.plain_result("用法：/传比改 <序号> [名字=xxx] [描述=xxx]")
+            event.stop_event()
+            return
+
+        try:
+            idx = int(parts[1]) - 1
+        except ValueError:
+            yield event.plain_result("序号必须是数字")
+            event.stop_event()
+            return
+
+        images = sorted(
+            f for f in self.staging_dir.iterdir()
+            if f.is_file() and f.suffix in (".webp", ".gif", ".jpg", ".jpeg", ".png")
+        )
+        if idx < 0 or idx >= len(images):
+            yield event.plain_result(f"序号超出范围，当前共 {len(images)} 张图片")
+            event.stop_event()
+            return
+
+        img = images[idx]
+        sidecar_path = self.staging_dir / f"{img.name}.json"
+        if not sidecar_path.exists():
+            yield event.plain_result(f"找不到 {img.name} 的元数据文件")
+            event.stop_event()
+            return
+
+        try:
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            yield event.plain_result(f"读取元数据失败: {e}")
+            event.stop_event()
+            return
+
+        old_name = sidecar.get("name", "")
+        fmt = sidecar.get("fmt", img.suffix.lstrip("."))
+
+        if len(parts) < 3:
+            desc = sidecar.get("ai_description", "")
+            info = [f"当前 #{parts[1]}：", f"  文件：{img.name}", f"  名字：{old_name}"]
+            if desc:
+                info.append(f"  描述：{desc}")
+            yield event.plain_result("\n".join(info))
+            event.stop_event()
+            return
+
+        new_name = None
+        new_desc = None
+        for pair in parts[2].split():
+            if "=" not in pair:
+                continue
+            key, val = pair.split("=", 1)
+            val = val.strip()
+            if key == "名字" and val:
+                new_name = val
+            elif key == "描述" and val:
+                new_desc = val
+
+        if new_name is None and new_desc is None:
+            yield event.plain_result("未识别到有效的修改项，格式：名字=xxx 描述=xxx")
+            event.stop_event()
+            return
+
+        changes = []
+
+        if new_name is not None:
+            new_filename = f"{new_name}.{fmt}"
+            existing = {
+                f.name for f in self.staging_dir.iterdir()
+                if f.is_file() and f.name != img.name and f.suffix != ".json"
+            }
+            if new_filename in existing:
+                yield event.plain_result(f"名字「{new_name}」已在 staging 中，请换一个")
+                event.stop_event()
+                return
+
+            old_filename = img.name
+            new_img_path = self.staging_dir / new_filename
+            new_sidecar_path = self.staging_dir / f"{new_filename}.json"
+
+            img.rename(new_img_path)
+            sidecar_path.rename(new_sidecar_path)
+
+            sidecar["name"] = new_name
+
+            changes.append(f"名字: {old_name} → {new_name}")
+            changes.append(f"文件: {old_filename} → {new_filename}")
+
+            img = new_img_path
+            sidecar_path = new_sidecar_path
+
+        if new_desc is not None:
+            old_desc = sidecar.get("ai_description", "")
+            sidecar["ai_description"] = new_desc
+            changes.append(f"描述: {old_desc or '空'} → {new_desc}")
+
+        sidecar_path.write_text(
+            json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        yield event.plain_result("修改完成：\n" + "\n".join(changes))
+        event.stop_event()
+
     @filter.command("pr提交")
     async def pr_submit(self, event: AstrMessageEvent):
         if not self.github_token:

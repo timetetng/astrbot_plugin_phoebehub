@@ -44,6 +44,12 @@
     "default": "timetetng",
     "hint": "测试期间可设为你的 fork 用户名。正式使用时会自动 fork 上游仓库。"
   },
+  "search_algorithm": {
+    "description": "搜索算法版本",
+    "type": "string",
+    "default": "v1",
+    "hint": "v1=原始算法(max四路RapidFuzz, 高召回但分数扁平); v2=改进算法(子串满分+比率抑制, 区分度更好)"
+  },
   "upload_auth": {
     "description": "上传/PR 权限控制",
     "type": "string",

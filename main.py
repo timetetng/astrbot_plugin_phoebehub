@@ -48,6 +48,7 @@ class PhoebeHubPlugin(Star):
         self.github_token = config.get("github_token", "") or ""
         self.github_target_owner = config.get("github_target_owner", "") or ""
         self.upload_auth = config.get("upload_auth", "admin") or "admin"
+        self.search_algorithm = config.get("search_algorithm", "v1") or "v1"
 
         self.image_dir = (
             Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME / "images"
@@ -657,15 +658,18 @@ class PhoebeHubPlugin(Star):
         return random.choice(memes) if memes else None
 
     def _fuzzy_match(self, keyword: str, memes: list, limit: int = 3) -> list:
-        if _HAS_RAPIDFUZZ:
-            return self._fuzzy_match_rapidfuzz(keyword, memes, limit)
-        logger.warning(
-            "[phoebehub] rapidfuzz/zhconv 未安装，已降级为 difflib 搜索，"
-            "效果较差。请执行: uv add rapidfuzz zhconv jieba"
-        )
-        return self._fuzzy_match_fallback(keyword, memes, limit)
+        if not _HAS_RAPIDFUZZ:
+            logger.warning(
+                "[phoebehub] rapidfuzz/zhconv 未安装，已降级为 difflib 搜索，"
+                "效果较差。请执行: uv add rapidfuzz zhconv jieba"
+            )
+            return self._fuzzy_match_fallback(keyword, memes, limit)
 
-    def _fuzzy_match_rapidfuzz(self, keyword: str, memes: list, limit: int = 3) -> list:
+        if self.search_algorithm == "v1":
+            return self._fuzzy_match_rapidfuzz_v1(keyword, memes, limit)
+        return self._fuzzy_match_rapidfuzz_v2(keyword, memes, limit)
+
+    def _fuzzy_match_rapidfuzz_v1(self, keyword: str, memes: list, limit: int = 3) -> list:
         kw_norm = _s2t(keyword, "zh-tw").lower()
         kw_tokens = set(jieba.cut(keyword)) if jieba else set()
         synonyms = self._load_synonyms()
@@ -686,6 +690,47 @@ class PhoebeHubPlugin(Star):
                 )
                 / 100
             )
+
+            syn_score = 0.0
+            if base < 0.6 and kw_tokens and synonyms:
+                title_tokens = set(jieba.cut(title))
+                for qt in kw_tokens:
+                    if qt in synonyms and synonyms[qt] & title_tokens:
+                        syn_score = 0.7
+                        break
+
+            score = max(base, syn_score)
+            if score >= 0.4:
+                best.append((title, round(score, 3)))
+
+        best.sort(key=lambda x: -x[1])
+        return best[:limit]
+
+    def _fuzzy_match_rapidfuzz_v2(self, keyword: str, memes: list, limit: int = 3) -> list:
+        kw_norm = _s2t(keyword, "zh-tw").lower()
+        kw_tokens = set(jieba.cut(keyword)) if jieba else set()
+        synonyms = self._load_synonyms()
+
+        best = []
+        for m in memes:
+            title = m.get("title", "")
+            if not title:
+                continue
+
+            title_norm = _s2t(title, "zh-tw").lower()
+
+            # 精确子串 → 满分，保证召回
+            if kw_norm in title_norm:
+                base = 1.0
+            else:
+                ratio_score = _fuzz.ratio(kw_norm, title_norm) / 100
+                token_set_score = _fuzz.token_set_ratio(kw_norm, title_norm) / 100
+
+                # token_set 易受单字共现膨胀，用 ratio 限制
+                if token_set_score > ratio_score * 1.5:
+                    token_set_score = ratio_score * 1.5
+
+                base = max(ratio_score, token_set_score)
 
             syn_score = 0.0
             if base < 0.6 and kw_tokens and synonyms:

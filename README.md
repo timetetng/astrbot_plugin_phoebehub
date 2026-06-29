@@ -55,6 +55,7 @@ uv pip install -r requirements.txt
 | `vision_provider_id` | str | "" | 视觉模型 provider，用于 /传比 自动命名+描述 |
 | `github_token` | str | "" | GitHub PAT，用于 /pr提交 自动推图+PR |
 | `github_target_owner` | str | `timetetng` | 测试时推送到指定 fork；留空则自动 fork 上游 |
+| `search_algorithm` | str | `v1` | `v1`=原始算法(四路RapidFuzz取max, 高召回但分数扁平); `v2`=改进算法(子串满分+比率抑制, 区分度更好) |
 | `upload_auth` | str | `admin` | `admin`=仅管理员可上传/改/PR；`everyone`=所有人可用 |
 
 ## License

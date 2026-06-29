@@ -153,7 +153,7 @@ class PhoebeHubPlugin(Star):
                 lines = [header]
                 chain = []
                 for i, (title, score) in enumerate(results, 1):
-                    lines.append(f"{i}. {title}（相似度 {score:.0%}）")
+                    lines.append(f"{i}. {title}（匹配度 {score:.0%}）")
                 msg = "\n".join(lines)
                 chain.append(Comp.Plain(msg + "\n"))
                 for title, _ in results:

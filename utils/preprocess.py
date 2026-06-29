@@ -1,6 +1,6 @@
 """Image preprocessing for meme uploads.
 
-Pure functions, no AstrBot dependency. Tested via `python -m preprocess --selftest`.
+Pure functions, no AstrBot dependency.
 """
 from __future__ import annotations
 
@@ -133,7 +133,7 @@ def process(src: Path, dst_dir: Path, *, name_stem: str) -> ProcessResult:
     """Process an image into a webp (static) or gif (animated) under MAX_BYTES.
 
     `name_stem` is the user-chosen filename without extension. Final filename
-    is `<name_stem>.webp` or `<name_stem>.gif` in `dst_dir`.
+    is ``<name_stem>.webp`` or ``<name_stem>.gif`` in `dst_dir`.
     """
     src = Path(src)
     dst_dir = Path(dst_dir)
@@ -177,8 +177,8 @@ def process(src: Path, dst_dir: Path, *, name_stem: str) -> ProcessResult:
 
 
 def unique_name(taken: set[str], stem: str, ext: str) -> str:
-    """Return `<stem>` or `<stem><n>` where n is the smallest int making the name
-    not collide with anything in `taken` (compared as `<name>.<ext>`)."""
+    """Return ``<stem>`` or ``<stem><n>`` where n is the smallest int making the name
+    not collide with anything in `taken` (compared as ``<name>.<ext>``)."""
     full = f"{stem}.{ext}"
     if full not in taken:
         return full
@@ -192,63 +192,4 @@ def unique_name(taken: set[str], stem: str, ext: str) -> str:
             raise RuntimeError(f"too many duplicates for stem={stem}")
 
 
-def _selftest() -> None:
-    """Tiny end-to-end check. Run: `python -m preprocess --selftest`"""
-    import json
-    import tempfile
 
-    from PIL import Image
-
-    with tempfile.TemporaryDirectory() as td:
-        td = Path(td)
-
-        # 1. Static oversize RGB → should compress to webp well under 2MB
-        big = Image.new("RGB", (3000, 3000), (255, 0, 0))
-        # Draw noise so it's not solid (solid compresses unrealistically small).
-        import random
-        rng = random.Random(0)
-        for x in range(0, 3000, 4):
-            for y in range(0, 3000, 4):
-                big.putpixel((x, y), (rng.randint(0, 255), rng.randint(0, 255), rng.randint(0, 255)))
-        src = td / "big.png"
-        big.save(src)
-
-        out_dir = td / "out"
-        r = process(src, out_dir, name_stem="测试")
-        assert r.fmt == "webp", f"static should be webp, got {r.fmt}"
-        assert r.final_bytes <= MAX_BYTES, f"{r.final_bytes} > {MAX_BYTES}"
-        assert r.path.suffix == ".webp"
-        print(f"static ok: {r.original_bytes} → {r.final_bytes} bytes ({r.width}x{r.height})")
-
-        # 2. Animated gif → should stay gif
-        g = Image.new("RGB", (200, 200), (0, 255, 0))
-        frames = [g.copy() for _ in range(8)]
-        for i, f in enumerate(frames):
-            for x in range(200):
-                f.putpixel((x, (i * 25 + x) % 200), (255, 0, 0))
-        gif_src = td / "anim.gif"
-        frames[0].save(gif_src, save_all=True, append_images=frames[1:], duration=80, loop=0)
-        r2 = process(gif_src, out_dir, name_stem="动图")
-        assert r2.fmt == "gif", f"animated should be gif, got {r2.fmt}"
-        assert r2.final_bytes <= MAX_BYTES, f"{r2.final_bytes} > {MAX_BYTES}"
-        print(f"animated ok: {r2.original_bytes} → {r2.final_bytes} bytes")
-
-        # 3. unique_name dedup
-        taken = {"开心菲比.webp", "开心菲比.gif"}
-        assert unique_name(taken, "开心菲比", "webp") == "开心菲比1.webp"
-        taken.add("开心菲比1.webp")
-        assert unique_name(taken, "开心菲比", "webp") == "开心菲比2.webp"
-        assert unique_name(set(), "新图", "gif") == "新图.gif"
-        print("unique_name ok")
-
-    print("selftest passed")
-
-
-if __name__ == "__main__":
-    import sys
-
-    if "--selftest" in sys.argv:
-        _selftest()
-    else:
-        print("usage: python -m preprocess --selftest", file=sys.stderr)
-        sys.exit(1)

@@ -2,7 +2,7 @@ name: astrbot_plugin_phoebehub
 display_name: 随机菲比表情包
 author: timetetng
 description: 从 phoebehub.top 随机获取一张菲比表情包。输入 啾比 即可获得一张可爱的菲比表情包~
-version: "1.0.0"
+version: "1.1.0"
 link: https://github.com/timetetng/astrbot_plugin_phoebehub
 support_platforms:
   - aiocqhttp

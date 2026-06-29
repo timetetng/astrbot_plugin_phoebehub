@@ -1,24 +1,10 @@
 import asyncio
-import difflib
 import json
 import random
 import time
 from pathlib import Path
+
 import httpx
-
-try:
-    import jieba
-except ImportError:
-    jieba = None
-try:
-    from rapidfuzz import fuzz as _fuzz
-    from zhconv import convert as _s2t
-
-    _HAS_RAPIDFUZZ = True
-except ImportError:
-    _fuzz = None
-    _s2t = None
-    _HAS_RAPIDFUZZ = False
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import logger
@@ -26,13 +12,18 @@ from astrbot.api import AstrBotConfig
 import astrbot.api.message_components as Comp
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from .phoebehub_preprocess import process as preprocess_image, unique_name
-from .phoebehub_captioner import caption_image
-from .phoebehub_pr import PhoebeHubPR
-
-MEMES_URL = "https://phoebehub.top/data/memes.json"
-BASE_URL = "https://phoebehub.top"
-PLUGIN_NAME = "astrbot_plugin_phoebehub"
+from .utils.captioner import caption_image
+from .utils.pr import PhoebeHubPR
+from .utils.preprocess import process as preprocess_image, unique_name
+from .utils.helpers import (
+    MEMES_URL,
+    BASE_URL,
+    PLUGIN_NAME,
+    load_synonyms,
+    collect_staging_names,
+    clean_expired_cache,
+    fuzzy_match,
+)
 
 
 class PhoebeHubPlugin(Star):
@@ -60,13 +51,17 @@ class PhoebeHubPlugin(Star):
         )
         self.staging_dir.mkdir(parents=True, exist_ok=True)
 
-        cleaned = self._clean_expired_cache()
+        cleaned = clean_expired_cache(self.image_dir, self.cache_max_hours)
         if cleaned:
             logger.info(f"[phoebehub] 启动时清理了 {cleaned} 个过期缓存文件")
 
         self._cache_data = None
         self._cache_time = 0.0
-        self._synonyms = None
+        self._synonyms = load_synonyms(Path(__file__).parent)
+
+    # ------------------------------------------------------------------
+    # Message / command handlers
+    # ------------------------------------------------------------------
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
@@ -141,7 +136,7 @@ class PhoebeHubPlugin(Star):
                 return
 
             kw = keyword.strip()
-            results = self._fuzzy_match(kw, memes, limit)
+            results = fuzzy_match(kw, memes, limit, self.search_algorithm, self._synonyms)
 
             if results:
                 best_score = results[0][1]
@@ -192,7 +187,6 @@ class PhoebeHubPlugin(Star):
         name = parts[1].strip() if len(parts) > 1 else ""
         safe = ""
         if name:
-            # Filter out path separators and shell-unfriendly chars; allow CJK + ASCII letters/digits/_-.
             safe = "".join(c for c in name if c.isalnum() or c in "_-. " or "\u4e00" <= c <= "\u9fff")
             safe = safe.strip().strip(".")
 
@@ -222,7 +216,7 @@ class PhoebeHubPlugin(Star):
             event.stop_event()
             return
 
-        taken = self._collect_staging_names()
+        taken = collect_staging_names(self.staging_dir, self._cache_data)
         uploader = f"{event.get_platform_name() or 'unknown'}:{event.get_sender_id()}"
 
         results = []
@@ -234,7 +228,6 @@ class PhoebeHubPlugin(Star):
                 results.append(("fail", f"下载失败: {e}"))
                 continue
 
-            # Caption before preprocess so the model sees the original quality.
             ai_name = ""
             ai_description = ""
             user_hint_for_model = safe if safe else ""
@@ -252,7 +245,6 @@ class PhoebeHubPlugin(Star):
                     ai_name = cap.name
                     ai_description = cap.description
 
-            # User-provided name always takes priority; AI only supplies description.
             if safe:
                 stem = safe if len(images) == 1 else f"{safe}{idx + 1}"
             elif ai_name:
@@ -266,12 +258,10 @@ class PhoebeHubPlugin(Star):
                 results.append(("fail", f"{stem}: 预处理失败"))
                 continue
 
-            # Dedupe against existing staged filenames + remote meme titles.
             ext = proc.fmt
             final_name = unique_name(taken, stem, ext)
             taken.add(final_name)
 
-            # Rename the file to the deduped name (process() used stem verbatim).
             final_path = self.staging_dir / final_name
             if proc.path != final_path:
                 proc.path.rename(final_path)
@@ -513,7 +503,7 @@ class PhoebeHubPlugin(Star):
         yield event.plain_result(f"已删除 {img.name} 及其元数据")
         event.stop_event()
 
-    @filter.command("pr提交",alias=["提交pr"])
+    @filter.command("pr提交", alias=["提交pr"])
     async def pr_submit(self, event: AstrMessageEvent):
         if not self._check_auth(event):
             yield event.plain_result("只有 bot 管理员才能提交 PR～")
@@ -630,6 +620,10 @@ class PhoebeHubPlugin(Star):
         ])
         event.stop_event()
 
+    # ------------------------------------------------------------------
+    # Stateful helpers (need instance config / cache)
+    # ------------------------------------------------------------------
+
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict = {"timeout": 120}
         if self.proxy:
@@ -656,152 +650,6 @@ class PhoebeHubPlugin(Star):
     async def _get_random_meme(self) -> dict | None:
         memes = await self._load_memes()
         return random.choice(memes) if memes else None
-
-    def _fuzzy_match(self, keyword: str, memes: list, limit: int = 3) -> list:
-        if not _HAS_RAPIDFUZZ:
-            logger.warning(
-                "[phoebehub] rapidfuzz/zhconv 未安装，已降级为 difflib 搜索，"
-                "效果较差。请执行: uv add rapidfuzz zhconv jieba"
-            )
-            return self._fuzzy_match_fallback(keyword, memes, limit)
-
-        if self.search_algorithm == "v1":
-            return self._fuzzy_match_rapidfuzz_v1(keyword, memes, limit)
-        return self._fuzzy_match_rapidfuzz_v2(keyword, memes, limit)
-
-    def _fuzzy_match_rapidfuzz_v1(self, keyword: str, memes: list, limit: int = 3) -> list:
-        kw_norm = _s2t(keyword, "zh-tw").lower()
-        kw_tokens = set(jieba.cut(keyword)) if jieba else set()
-        synonyms = self._load_synonyms()
-
-        best = []
-        for m in memes:
-            title = m.get("title", "")
-            if not title:
-                continue
-
-            title_norm = _s2t(title, "zh-tw").lower()
-            base = (
-                max(
-                    _fuzz.ratio(kw_norm, title_norm),
-                    _fuzz.partial_ratio(kw_norm, title_norm),
-                    _fuzz.token_sort_ratio(kw_norm, title_norm),
-                    _fuzz.token_set_ratio(kw_norm, title_norm),
-                )
-                / 100
-            )
-
-            syn_score = 0.0
-            if base < 0.6 and kw_tokens and synonyms:
-                title_tokens = set(jieba.cut(title))
-                for qt in kw_tokens:
-                    if qt in synonyms and synonyms[qt] & title_tokens:
-                        syn_score = 0.7
-                        break
-
-            score = max(base, syn_score)
-            if score >= 0.4:
-                best.append((title, round(score, 3)))
-
-        best.sort(key=lambda x: -x[1])
-        return best[:limit]
-
-    def _fuzzy_match_rapidfuzz_v2(self, keyword: str, memes: list, limit: int = 3) -> list:
-        kw_norm = _s2t(keyword, "zh-tw").lower()
-        kw_tokens = set(jieba.cut(keyword)) if jieba else set()
-        synonyms = self._load_synonyms()
-
-        best = []
-        for m in memes:
-            title = m.get("title", "")
-            if not title:
-                continue
-
-            title_norm = _s2t(title, "zh-tw").lower()
-
-            # 精确子串 → 满分，保证召回
-            if kw_norm in title_norm:
-                base = 1.0
-            else:
-                ratio_score = _fuzz.ratio(kw_norm, title_norm) / 100
-                token_set_score = _fuzz.token_set_ratio(kw_norm, title_norm) / 100
-
-                # token_set 易受单字共现膨胀，用 ratio 限制
-                if token_set_score > ratio_score * 1.5:
-                    token_set_score = ratio_score * 1.5
-
-                base = max(ratio_score, token_set_score)
-
-            syn_score = 0.0
-            if base < 0.6 and kw_tokens and synonyms:
-                title_tokens = set(jieba.cut(title))
-                for qt in kw_tokens:
-                    if qt in synonyms and synonyms[qt] & title_tokens:
-                        syn_score = 0.7
-                        break
-
-            score = max(base, syn_score)
-            if score >= 0.4:
-                best.append((title, round(score, 3)))
-
-        best.sort(key=lambda x: -x[1])
-        return best[:limit]
-
-    def _fuzzy_match_fallback(self, keyword: str, memes: list, limit: int = 3) -> list:
-        titles = [m.get("title", "") for m in memes if m.get("title")]
-        close = difflib.get_close_matches(keyword, titles, n=limit, cutoff=0.3)
-        return [
-            (t, difflib.SequenceMatcher(None, keyword.lower(), t.lower()).ratio())
-            for t in close
-        ][:limit]
-
-    def _load_synonyms(self) -> dict:
-        if self._synonyms is not None:
-            return self._synonyms
-
-        syn_path = Path(__file__).parent / "meme_synonyms.json"
-        if not syn_path.exists():
-            self._synonyms = {}
-            return self._synonyms
-
-        try:
-            with open(syn_path, encoding="utf-8") as f:
-                raw = json.load(f)
-
-            syns = {}
-            for word, syn_list in raw.items():
-                if word not in syns:
-                    syns[word] = set()
-                for s in syn_list:
-                    syns[word].add(s)
-                    if s not in syns:
-                        syns[s] = set()
-                    syns[s].add(word)
-
-            self._synonyms = syns
-        except Exception as e:
-            logger.warning(f"[phoebehub] 同义词文件加载失败: {e}")
-            self._synonyms = {}
-
-        return self._synonyms
-
-    def _collect_staging_names(self) -> set[str]:
-        """Filenames (with ext) already taken — either locally staged or remote.
-        Used to dedup uploads so PR filenames don't collide."""
-        taken: set[str] = set()
-        if self.staging_dir.exists():
-            for f in self.staging_dir.iterdir():
-                if f.is_file() and f.suffix != ".json":
-                    taken.add(f.name)
-
-        # Pull from the in-memory cache if available; otherwise empty.
-        if self._cache_data:
-            for m in self._cache_data.get("memes", []):
-                url = m.get("url", "")
-                if url:
-                    taken.add(Path(url).name)
-
-        return taken
 
     async def _ensure_local_image(self, url_path: str, meme: dict) -> Path | None:
         local_path = self.image_dir / f"{meme['id']}{Path(url_path).suffix}"
@@ -840,17 +688,6 @@ class PhoebeHubPlugin(Star):
             return local_path
 
         return None
-
-    def _clean_expired_cache(self) -> int:
-        if self.cache_max_hours <= 0 or not self.image_dir.exists():
-            return 0
-        cutoff = time.time() - self.cache_max_hours * 3600
-        count = 0
-        for f in self.image_dir.iterdir():
-            if f.is_file() and f.stat().st_mtime < cutoff:
-                f.unlink()
-                count += 1
-        return count
 
     async def terminate(self):
         pass

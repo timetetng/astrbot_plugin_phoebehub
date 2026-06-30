@@ -177,18 +177,18 @@ def process(src: Path, dst_dir: Path, *, name_stem: str) -> ProcessResult:
 
 
 def unique_name(taken: set[str], stem: str, ext: str) -> str:
-    """Return ``<stem>`` or ``<stem><n>`` where n is the smallest int making the name
+    """Return ``<stem>.`` or ``<stem>_<n>.`` where n is the smallest int making the name
     not collide with anything in `taken` (compared as ``<name>.<ext>``)."""
     full = f"{stem}.{ext}"
     if full not in taken:
         return full
     n = 1
     while True:
-        candidate = f"{stem}{n}.{ext}"
+        candidate = f"{stem}_{n}.{ext}"
         if candidate not in taken:
             return candidate
         n += 1
-        if n > 9999:  # ponytail: bail; if you've staged 9999 dupes something else is wrong.
+        if n > 9999:
             raise RuntimeError(f"too many duplicates for stem={stem}")
 
 

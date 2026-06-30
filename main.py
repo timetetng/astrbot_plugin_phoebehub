@@ -216,7 +216,6 @@ class PhoebeHubPlugin(Star):
             event.stop_event()
             return
 
-        taken = collect_staging_names(self.staging_dir, self._cache_data)
         uploader = f"{event.get_platform_name() or 'unknown'}:{event.get_sender_id()}"
 
         results = []
@@ -246,20 +245,24 @@ class PhoebeHubPlugin(Star):
                     ai_description = cap.description
 
             if safe:
-                stem = safe if len(images) == 1 else f"{safe}{idx + 1}"
+                stem = safe
             elif ai_name:
                 stem = ai_name
             else:
                 stem = f"未命名{idx + 1}"
             try:
-                proc = preprocess_image(Path(src_path), self.staging_dir, name_stem=stem)
+                tmp_stem = f"._tmp_{idx}_{random.randrange(10**6)}_{stem}"
+                proc = preprocess_image(Path(src_path), self.staging_dir, name_stem=tmp_stem)
             except Exception as e:
                 logger.error(f"[phoebehub] 预处理失败: {e}")
                 results.append(("fail", f"{stem}: 预处理失败"))
                 continue
 
             ext = proc.fmt
+            taken = collect_staging_names(self.staging_dir, self._cache_data)
+            logger.warning(f"[phoebehub] taken={taken} stem={stem} ext={ext}")
             final_name = unique_name(taken, stem, ext)
+            logger.warning(f"[phoebehub] unique_name → {final_name}")
             taken.add(final_name)
 
             final_path = self.staging_dir / final_name
